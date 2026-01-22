@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Squirrel Sprint (Fixed Assets)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom CSS for Game Appearance */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d0d0d;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden; /* Prevent scrolling */
+        }
+        #gameCanvas {
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            display: block;
+            background-color: #1a1a1a;
+        }
+    </style>
+</head>
+<body>
+
+<div id="gameContainer" class="p-4 bg-gray-900 rounded-lg shadow-2xl">
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    // --- Asset Data URLs (Base64 SVG PLACEHOLDERS) ---
+    // 💡 IMPORTANT: Replace these placeholder strings with the actual, long Base64 strings 
+    // generated from your SVG files (data:image/svg+xml;base64,...).
+    const ASSET_PATHS = {
+        // Placeholder for excavator.svg (Player)
+        player_orig: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0NSIgZmlsbD0iI2Y3OWYwMCIvPjxwb2x5Z29uIHBvaW50cz0iMzAsNjAgNzAsNjAgNTAsMjAiIGZpbGw9IiMwMDRjY2YiLz48L3N2Zz4=",
+        // Placeholder for squirrel.svg (Normal Enemy)
+        squirrel_normal: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0NSIgZmlsbD0iIzgyNTUwMCIvPjxjaXJjbGUgY3g9IjM1IiBjeT0iNDAiIHI9IjUiIGZpbGw9IndoaXRlIi8+PGNpcmNsZSBjeD0iNjUiIGN5PSI0MCIgcj0iNSIgZmlsbD0id2hpdGUiLz48L3N2Zz4=",
+        // Placeholder for squirrel_vulnerable.svg (Vulnerable Enemy)
+        squirrel_vulnerable: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0NSIgZmlsbD0iI2ZmNGE0YyIvPjxjaXJjbGUgY3g9IjM1IiBjeT0iNDAiIHI9IjUiIGZpbGw9ImJsYWNrIi8+PGNpcmNsZSBjeD0iNjUiIGN5PSI0MCIgcj0iNSIgZmlsbD0iYmxhY2siLz48L3N2Zz4=",
+        // Placeholder for acorn.svg (Acorn/Pellet)
+        acorn: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cGF0aCBkPSJNNTAsMTBMMTAsOTBoODBMMTAsOTBWMTAiIGZpbGw9IiM4YjQ1MTMiLz48L3N2Zz4=",
+        // Placeholder for start_screen.svg (Start Screen Background)
+        start_screen: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iIzE0MTQyZSIvPjx0ZXh0IHg9IjUwIiB5PSI1MCIgZm9udC1zaXplPSIxMiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiPkxPTkwgU1VSVkJWQkUgU1BSSU5UIDwvdGV4dD48dGV4dCB4PSI1MCIgeT0iNzAiIGZvbnQtc2l6ZT0iMTIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiNGRkQ3MDAiPlBBU1RFIElNIEJBU0U2NCBUTyBXUks8L3RleHQ+PC9zdmc+ ",
+    };
+
+    let ASSETS = {}; // Object to hold the loaded Image objects
+
+    /**
+     * Loads image data from a data URL asynchronously, guaranteeing load success.
+     * @param {string} name - The asset key name.
+     * @param {string} dataUrl - The Base64 data URL string.
+     * @returns {Promise<HTMLImageElement>}
+     */
+    function loadImage(name, dataUrl) {
+        return new Promise((resolve, reject) => {
+            if (dataUrl.indexOf('data:image/svg+xml;base64') !== 0) {
+                 // Check if the placeholder hasn't been replaced
+                 console.error(`ERROR: Asset ${name} has not been replaced with the correct Base64 string.`);
+                 reject(new Error("Missing Base64 Data."));
+                 return;
+            }
+            const img = new Image();
+            img.onload = () => {
+                ASSETS[name] = img;
+                resolve(img);
+            };
+            img.onerror = () => {
+                console.error(`Failed to create image object from Base64 data for: ${name}`);
+                reject(new Error(`Failed to load embedded asset: ${name}`));
+            };
+            img.src = dataUrl;
+        });
+    }
+
+    // --- Constants from Pygame Script ---
+    const TILE_SIZE = 36;
+    const UI_BAR_HEIGHT = 60;
+    const PLAYER_SPEED = 4;
+    const SQUIRREL_SPEED = 4;
+    const SQUIRREL_VULNERABLE_SPEED = 3;
+    const POWERUP_DURATION = 300; 
+    const FPS = 30;
+    const FRAME_DURATION = 1000 / FPS;
+
+    const maze_layout = [
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+        "W............WW............W",
+        "W.WWWW.WWWWW.WW.WWWWW.WWWW.W",
+        "W O  W.W   W.WW.W   W.W  O W",
+        "W.WWWW.WWWWW.WW.WWWWW.WWWW.W",
+        "W..........................W",
+        "W.WWWW.WW.WWWWWWWW.WW.WWWW.W",
+        "W.WWWW.WW.WWWWWWWW.WW.WWWW.W",
+        "W......WW....WW....WW......W",
+        "WWWWWW.WWWWW WW WWWWW.WWWWWW",
+        "WWWWWW.WWWWW WW WWWWW.WWWWWW",
+        "WWWWWW.WW  GGGGGG  WW.WWWWWW",
+        "WWWWWW.WW WWWWWWWW WW.WWWWWW",
+        "WWWWWW.WW W------W WW.WWWWWW",
+        "L      .  W------W  .      R",
+        "WWWWWW.WW W------W WW.WWWWWW",
+        "WWWWWW.WW WWWWWWWW WW.WWWWWW",
+        "WWWWWW.WW          WW.WWWWWW",
+        "WWWWWW.WW WWWWWWWW WW.WWWWWW",
+        "WWWWWW.WW WWWWWWWW WW.WWWWWW",
+        "W............WW............W",
+        "W.WWWW.WWWWW.WW.WWWWW.WWWW.W",
+        "W.WWWW.WWWWW.WW.WWWWW.WWWW.W",
+        "W O..W.......P........W..O W",
+        "WWW.WW.WW.WWWWWWWW.WW.WW.WWW",
+        "WWW.WW.WW.WWWWWWWW.WW.WW.WWW",
+        "W......WW....WW....WW......W",
+        "W.WWWWWWWWWW.WW.WWWWWWWWWW.W",
+        "W.WWWWWWWWWW.WW.WWWWWWWWWW.W",
+        "W..........................W",
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+    ];
+
+    const MAZE_ROWS = maze_layout.length;
+    const MAZE_COLS = maze_layout[0].length;
+    const SCREEN_WIDTH = MAZE_COLS * TILE_SIZE;
+    const SCREEN_HEIGHT = (MAZE_ROWS * TILE_SIZE) + UI_BAR_HEIGHT;
+
+    let player_images = {}; 
+
+    // --- Utility Class (Pygame.Rect Equivalent) ---
+    class Rect {
+        constructor(x, y, w, h) {
+            this.x = x;
+            this.y = y;
+            this.width = w;
+            this.height = h;
+        }
+        collides(other) {
+            return this.x < other.x + other.width &&
+                   this.x + this.width > other.x &&
+                   this.y < other.y + other.height &&
+                   this.y + this.height > other.y;
+        }
+        get center() {
+            return { x: this.x + this.width / 2, y: this.y + this.height / 2 };
+        }
+        set center({ x, y }) {
+            this.x = x - this.width / 2;
+            this.y = y - this.height / 2;
+        }
+        copy() {
+            return new Rect(this.x, this.y, this.width, this.height);
+        }
+        set top_left(v) { this.x = v.x; this.y = v.y; }
+    }
+
+    // --- Squirrel Class ---
+    class Squirrel {
+        constructor(x, y) {
+            this.start_pos = { x: x, y: y };
+            this.rect = new Rect(x, y, TILE_SIZE, TILE_SIZE); 
+            this.direction = 'up';
+            this.target = this.rect.copy();
+            this.vulnerable = false;
+            this.direction_map = { 'up': { dr: -1, dc: 0 }, 'down': { dr: 1, dc: 0 }, 'left': { dr: 0, dc: -1 }, 'right': { dr: 0, dc: 1 } };
+            this.opposites = { 'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left' };
+        }
+
+        move(wall_tiles, left_tunnel, right_tunnel) {
+            const current_speed = this.vulnerable ? SQUIRREL_VULNERABLE_SPEED : SQUIRREL_SPEED;
+            const target_center = this.target.center;
+            const rect_center = this.rect.center;
+
+            if (Math.abs(rect_center.x - target_center.x) < current_speed && Math.abs(rect_center.y - target_center.y) < current_speed) {
+                this.rect.center = target_center; 
+
+                const current_col = Math.round(this.rect.x / TILE_SIZE);
+                const current_row = Math.round((this.rect.y - UI_BAR_HEIGHT) / TILE_SIZE);
+
+                let valid_directions = [];
+                for (const [d, { dr, dc }] of Object.entries(this.direction_map)) {
+                    if (!wall_tiles.has(`${current_row + dr},${current_col + dc}`)) {
+                        valid_directions.push(d);
+                    }
+                }
+
+                if (valid_directions.length === 0) return;
+
+                if (valid_directions.length > 1 && valid_directions.includes(this.opposites[this.direction])) {
+                    valid_directions = valid_directions.filter(d => d !== this.opposites[this.direction]);
+                }
+
+                this.direction = valid_directions[Math.floor(Math.random() * valid_directions.length)];
+
+                if (this.direction === 'up') this.target.y -= TILE_SIZE;
+                else if (this.direction === 'down') this.target.y += TILE_SIZE;
+                else if (this.direction === 'left') this.target.x -= TILE_SIZE;
+                else if (this.direction === 'right') this.target.x += TILE_SIZE;
+            }
+
+            if (this.rect.y > this.target.y) this.rect.y = Math.max(this.target.y, this.rect.y - current_speed);
+            else if (this.rect.y < this.target.y) this.rect.y = Math.min(this.target.y, this.rect.y + current_speed);
+            else if (this.rect.x > this.target.x) this.rect.x = Math.max(this.target.x, this.rect.x - current_speed);
+            else if (this.rect.x < this.target.x) this.rect.x = Math.min(this.target.x, this.rect.x + current_speed);
+
+            if (left_tunnel && this.rect.collides(left_tunnel)) {
+                this.rect.x = right_tunnel.x - TILE_SIZE;
+                this.target = this.rect.copy();
+            } else if (right_tunnel && this.rect.collides(right_tunnel)) {
+                this.rect.x = left_tunnel.x + TILE_SIZE;
+                this.target = this.rect.copy();
+            }
+        }
+
+        draw(ctx) {
+            const img = this.vulnerable ? ASSETS.squirrel_vulnerable : ASSETS.squirrel_normal;
+            ctx.drawImage(img, this.rect.x, this.rect.y, TILE_SIZE, TILE_SIZE);
+        }
+    }
+
+    // --- Player/Asset Setup Functions ---
+
+    /**
+     * Helper function to rotate/flip an image on a temporary canvas.
+     */
+    function transformImage(img, rotation, flipX) {
+        const scale = 1.4; 
+        const w = TILE_SIZE * scale;
+        const h = TILE_SIZE * scale;
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const c = canvas.getContext('2d');
+        
+        c.translate(w / 2, h / 2);
+        if (flipX) c.scale(-1, 1);
+        if (rotation !== 0) {
+            c.rotate(rotation * Math.PI / 180);
+        }
+        c.drawImage(img, -w / 2, -h / 2, w, h); 
+        
+        return canvas;
+    }
+
+    /**
+     * Initializes all directional sprites for the player after loading the base image.
+     */
+    function setupPlayerImages() {
+        const img = ASSETS.player_orig;
+
+        player_images = {
+            'right': transformImage(img, 0, false),
+            'left': transformImage(img, 0, true),
+            'up': transformImage(img, -90, false),
+            'down': transformImage(img, 90, false),
+        };
+
+        const life_canvas = document.createElement('canvas');
+        life_canvas.width = TILE_SIZE;
+        life_canvas.height = TILE_SIZE;
+        life_canvas.getContext('2d').drawImage(img, 0, 0, TILE_SIZE, TILE_SIZE);
+        ASSETS.life_icon = life_canvas;
+    }
+
+    // --- Game State Variables ---
+    let ctx;
+    let wall_rects = [];
+    let wall_tiles = new Set();
+    let acorn_rects = [];
+    let squirrels = [];
+    let player_start_pos = { x: 0, y: 0 };
+    let left_tunnel_rect = null;
+    let right_tunnel_rect = null;
+    let player_rect;
+    let player_direction = 'right';
+    let score = 0;
+    let lives = 3;
+    let powerup_timer = 0;
+    let game_state = 'loading'; 
+    let keys_pressed = {};
+    let last_frame_time = performance.now();
+
+
+    function setupLevel() {
+        wall_rects = []; wall_tiles = new Set(); acorn_rects = []; squirrels = [];
+        player_start_pos = { x: 0, y: 0 }; left_tunnel_rect = null; right_tunnel_rect = null;
+
+        for (let r = 0; r < MAZE_ROWS; r++) {
+            for (let c = 0; c < MAZE_COLS; c++) {
+                const char = maze_layout[r][c];
+                const x = c * TILE_SIZE;
+                const y = (r * TILE_SIZE) + UI_BAR_HEIGHT;
+
+                if (char === 'W' || char === '-') {
+                    wall_rects.push(new Rect(x, y, TILE_SIZE, TILE_SIZE)); wall_tiles.add(`${r},${c}`);
+                } else if (char === 'G') {
+                    squirrels.push(new Squirrel(x, y));
+                } else if (char === 'P') {
+                    player_start_pos = { x: x, y: y };
+                } else if (char === 'L') {
+                    left_tunnel_rect = new Rect(x, y, TILE_SIZE, TILE_SIZE);
+                } else if (char === 'R') {
+                    right_tunnel_rect = new Rect(x, y, TILE_SIZE, TILE_SIZE);
+                }
+                else if (char === '.') {
+                    const acorn_size = TILE_SIZE / 2; 
+                    acorn_rects.push({
+                        rect: new Rect(x + (TILE_SIZE - acorn_size) / 2, y + (TILE_SIZE - acorn_size) / 2, acorn_size, acorn_size),
+                        type: '.'
+                    });
+                }
+                else if (char === 'O') {
+                    const large_acorn_size = TILE_SIZE * 0.8; 
+                    acorn_rects.push({
+                        rect: new Rect(x + (TILE_SIZE - large_acorn_size) / 2, y + (TILE_SIZE - large_acorn_size) / 2, large_acorn_size, large_acorn_size),
+                        type: 'O'
+                    });
+                }
+            }
+        }
+
+        if (!player_rect) {
+            player_rect = new Rect(player_start_pos.x, player_start_pos.y, TILE_SIZE, TILE_SIZE);
+        } else {
+            player_rect.top_left = player_start_pos;
+        }
+
+        score = 0; lives = 3; powerup_timer = 0;
+    }
+
+    // --- Input & Update Logic (Unchanged from Pygame Conversion) ---
+    function handleKeyDown(e) {
+        keys_pressed[e.key] = true;
+        
+        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'a', 'd', 'w', 's'].includes(e.key)) {
+            e.preventDefault(); 
+        }
+
+        if (game_state === 'start' || game_state === 'won' || game_state === 'game_over') {
+            if (game_state !== 'start') { setupLevel(); }
+            game_state = 'playing';
+        }
+        if (game_state === 'error') {
+            game_state = 'loading';
+            window.onload(); // Reload assets on keypress to give a second chance
+        }
+    }
+
+    function handleKeyUp(e) {
+        keys_pressed[e.key] = false;
+    }
+
+    function update() {
+        if (game_state !== 'playing') return;
+
+        if (powerup_timer > 0) {
+            powerup_timer--;
+            if (powerup_timer === 0) { squirrels.forEach(s => s.vulnerable = false); }
+        }
+
+        const old_player_x = player_rect.x;
+        const old_player_y = player_rect.y;
+
+        if (keys_pressed['ArrowLeft'] || keys_pressed['a']) { player_direction = 'left'; player_rect.x -= PLAYER_SPEED; } 
+        else if (keys_pressed['ArrowRight'] || keys_pressed['d']) { player_direction = 'right'; player_rect.x += PLAYER_SPEED; } 
+        else if (keys_pressed['ArrowUp'] || keys_pressed['w']) { player_direction = 'up'; player_rect.y -= PLAYER_SPEED; } 
+        else if (keys_pressed['ArrowDown'] || keys_pressed['s']) { player_direction = 'down'; player_rect.y += PLAYER_SPEED; }
+
+        for (const wall of wall_rects) {
+            if (player_rect.collides(wall)) { player_rect.x = old_player_x; player_rect.y = old_player_y; break; }
+        }
+
+        for (const squirrel of squirrels) { squirrel.move(wall_tiles, left_tunnel_rect, right_tunnel_rect); }
+
+        if (left_tunnel_rect && player_rect.collides(left_tunnel_rect)) { player_rect.x = right_tunnel_rect.x - TILE_SIZE; } 
+        else if (right_tunnel_rect && player_rect.collides(right_tunnel_rect)) { player_rect.x = left_tunnel_rect.x + TILE_SIZE; }
+
+        const remaining_acorns = [];
+        for (const acorn of acorn_rects) {
+            if (player_rect.collides(acorn.rect)) {
+                score += (acorn.type === 'O') ? 50 : 10;
+                if (acorn.type === 'O') {
+                    powerup_timer = POWERUP_DURATION;
+                    squirrels.forEach(s => s.vulnerable = true);
+                }
+            } else { remaining_acorns.push(acorn); }
+        }
+        acorn_rects = remaining_acorns;
+
+        if (acorn_rects.length === 0) { game_state = 'won'; return; }
+
+        for (const squirrel of squirrels) {
+            if (player_rect.collides(squirrel.rect)) {
+                if (squirrel.vulnerable) {
+                    score += 200; squirrel.rect.top_left = squirrel.start_pos;
+                } else {
+                    lives--;
+                    if (lives <= 0) { game_state = 'game_over'; } 
+                    else { player_rect.top_left = player_start_pos; }
+                    break;
+                }
+            }
+        }
+    }
+
+    // --- Drawing Logic ---
+    function draw() {
+        ctx.fillStyle = '#1a1a1a'; 
+        ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+        if (game_state === 'loading') {
+            ctx.fillStyle = '#ffffff'; ctx.font = '30px "Inter", sans-serif';
+            ctx.textAlign = 'center'; ctx.fillText('Loading Assets...', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2);
+            return;
+        }
+        
+        if (game_state === 'error') {
+            ctx.fillStyle = '#ff0000'; ctx.font = '30px "Inter", sans-serif';
+            ctx.textAlign = 'center'; 
+            ctx.fillText('CRITICAL ERROR: MISSING ASSET DATA', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 20);
+            ctx.font = '20px "Inter", sans-serif';
+            ctx.fillText('Did you paste the Base64 strings correctly?', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 20);
+            return;
+        }
+
+        if (game_state === 'start') {
+            if (ASSETS.start_screen) {
+                ctx.drawImage(ASSETS.start_screen, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+            }
+            ctx.font = '24px "Inter", sans-serif';
+            ctx.fillStyle = '#FFD700';
+            ctx.fillText('Press any key to play', SCREEN_WIDTH / 2, SCREEN_HEIGHT - 50);
+            return;
+        }
+
+        const wall_color = '#3333FF'; 
+        ctx.fillStyle = wall_color;
+        for (const rect of wall_rects) {
+            const line_thickness = Math.max(2, TILE_SIZE / 8); 
+            ctx
