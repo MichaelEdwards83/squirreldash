@@ -1127,3 +1127,4 @@ window.onload = () => {
     const game = new Game('gameCanvas');
     game.init();
 };
+// force update
