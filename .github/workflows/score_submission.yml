@@ -1,0 +1,82 @@
+name: Score Submission
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  process-score:
+    if: contains(github.event.issue.title, 'NEW SCORE')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Parse Score
+        id: parse
+        run: |
+          # Extract JSON from issue body
+          BODY="${{ github.event.issue.body }}"
+          # Clean up potential markdown code blocks
+          JSON=$(echo "$BODY" | sed 's/```json//g' | sed 's/```//g')
+          
+          # Validate and save to temp file
+          echo "$JSON" > score_data.json
+          
+          # Extract values using jq
+          NAME=$(jq -r .name score_data.json)
+          SCORE=$(jq -r .score score_data.json)
+          
+          echo "Player: $NAME"
+          echo "Score: $SCORE"
+          
+          # Export for next steps
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+
+      - name: Update Leaderboard
+        run: |
+          # Create python script to update json
+          cat <<EOF > update_scores.py
+          import json
+          import os
+          
+          new_entry = {"name": "${{ steps.parse.outputs.name }}", "score": int("${{ steps.parse.outputs.score }}")}
+          
+          try:
+              if os.path.exists('highscores.json'):
+                  with open('highscores.json', 'r') as f:
+                      scores = json.load(f)
+              else:
+                  scores = []
+              
+              scores.append(new_entry)
+              scores.sort(key=lambda x: x['score'], reverse=True)
+              scores = scores[:10]
+              
+              with open('highscores.json', 'w') as f:
+                  json.dump(scores, f, indent=4)
+          except Exception as e:
+              print(f"Error: {e}")
+              exit(1)
+          EOF
+          
+          python3 update_scores.py
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name 'SquirrelBot'
+          git config --global user.email 'bot@squirrel.dash'
+          git add highscores.json
+          git commit -m "New High Score: ${{ steps.parse.outputs.name }} - ${{ steps.parse.outputs.score }}"
+          git push
+
+      - name: Close Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue close ${{ github.event.issue.number }} --comment "Score accepted! Leaderboard updated."

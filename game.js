@@ -93,9 +93,9 @@ class Squirrel {
             return null; // RANDOM
         }
     }
-    
 
-    
+
+
 
     move(wall_tiles, left_tunnel, right_tunnel, player_rect, player_direction, maze_dims, scatter_mode = false) {
         const current_speed = this.vulnerable ? this.vulnerable_speed : this.normal_speed;
@@ -244,6 +244,61 @@ class SoundManager {
     }
 }
 
+// --- High Score Manager ---
+class HighScoreManager {
+    constructor() {
+        this.scores = [];
+        this.loadScores();
+    }
+
+    async loadScores() {
+        try {
+            const response = await fetch('/api/scores');
+            if (response.ok) {
+                this.scores = await response.json();
+            } else {
+                throw new Error('API not available');
+            }
+        } catch (e) {
+            console.log('Using local storage fallback');
+            this.scores = JSON.parse(localStorage.getItem('squirrel_dash_scores')) || [];
+        }
+    }
+
+    isHighScore(score) {
+        if (score === 0) return false;
+        if (this.scores.length < 10) return true;
+        return score > this.scores[this.scores.length - 1].score;
+    }
+
+    async submitScore(name, score) {
+        const newEntry = { name: name.toUpperCase(), score: score };
+
+        // 1. Save locally immediately for instant gratification
+        this.scores.push(newEntry);
+        this.scores.sort((a, b) => b.score - a.score);
+        this.scores = this.scores.slice(0, 10);
+        localStorage.setItem('squirrel_dash_scores', JSON.stringify(this.scores));
+
+        // 2. Open GitHub Issue for Global Submission
+        const repoUrl = "https://github.com/MichaelEdwards83/squirreldash/issues/new";
+        const title = encodeURIComponent(`NEW SCORE: ${name.toUpperCase()}`);
+        const body = encodeURIComponent(`
+\`\`\`json
+${JSON.stringify(newEntry)}
+\`\`\`
+        `);
+
+        window.open(`${repoUrl}?title=${title}&body=${body}`, '_blank');
+
+        return true;
+    }
+
+    getScores() {
+        return this.scores;
+    }
+}
+
 class Game {
     constructor(canvasId) {
         this.canvas = document.getElementById(canvasId);
@@ -252,6 +307,7 @@ class Game {
 
         // Audio
         this.sound = new SoundManager();
+        this.highScores = new HighScoreManager();
 
         // Constants
         this.TILE_SIZE = 36;
@@ -382,13 +438,13 @@ class Game {
         // Game State
         this.state = 'loading'; // loading, start, playing, won, game_over
         this.score = 0;
-        this.lives = 3;
+        this.lives = 5;
         this.powerup_timer = 0;
         this.scatter_mode = false;
         this.mode_timer = 0;
         this.SCATTER_DURATION = 200; // ~7 seconds
         this.CHASE_DURATION = 600; // ~20 seconds
-    
+
         this.generateWallLines();
         this.last_frame_time = performance.now();
         this.assets = {};
@@ -556,14 +612,14 @@ class Game {
         // Reset variables but keep score if playing
         if (this.state !== 'playing') {
             this.score = 0;
-            this.lives = 3;
+            this.lives = 5;
         }
         this.powerup_timer = 0;
         this.scatter_mode = false;
         this.mode_timer = 0;
         this.SCATTER_DURATION = 200; // ~7 seconds
         this.CHASE_DURATION = 600; // ~20 seconds
-    
+
         this.generateWallLines();
     }
 
@@ -588,430 +644,482 @@ class Game {
         }
 
         // State Transitions
-        if (['start', 'won', 'game_over'].includes(this.state)) {
-            if (this.state !== 'start') {
-                // If restarting from win/loss, reset score completely
-                if (this.state === 'won' || this.state === 'game_over') {
-                    this.score = 0;
-                    this.lives = 3;
-                }
-                this.setupLevel(); window.game_instance = this;
-            }
-            this.state = 'playing';
-
-            // Resume Audio on start
-            if (this.sound.ctx.state === 'suspended') {
-                this.sound.ctx.resume();
-            }
-            console.log("Game State changed to: playing");
-        }
-    }
-
-    handleKeyUp(e) {
-        this.keys_pressed[e.key] = false;
-    }
-
-    update() {
-        if (this.state !== 'playing') return;
-
-        if (this.powerup_timer > 0) {
-            this.powerup_timer--;
-            if (this.powerup_timer === 0) {
-                this.squirrels.forEach(s => s.vulnerable = false);
-            }
-        }
-
-        this.movePlayer();
-
-        for (const squirrel of this.squirrels) {
-            squirrel.move(
-                this.wall_tiles,
-                this.left_tunnel_rect,
-                this.right_tunnel_rect,
-                this.player_rect,
-                this.player_direction,
-                { rows: this.MAZE_ROWS, cols: this.MAZE_COLS },
-                this.scatter_mode
-            );
-        }
-
-        this.checkCollisions();
-    }
-
-    isPlayerAligned() {
-        const center = this.player_rect.center;
-        const col_center_x = Math.floor(center.x / this.TILE_SIZE) * this.TILE_SIZE + this.TILE_SIZE / 2;
-        const row_center_y = Math.floor((center.y - this.UI_BAR_HEIGHT) / this.TILE_SIZE) * this.TILE_SIZE + this.TILE_SIZE / 2 + this.UI_BAR_HEIGHT;
-        const tolerance = this.PLAYER_SPEED / 2;
-
-        return Math.abs(center.x - col_center_x) < tolerance && Math.abs(center.y - row_center_y) < tolerance;
-    }
-
-    movePlayer() {
-        const is_aligned = this.isPlayerAligned();
-        const player_center = this.player_rect.center;
-        const target_center = this.player_target.center;
-        const dir_map = { 'up': { dr: -1, dc: 0 }, 'down': { dr: 1, dc: 0 }, 'left': { dr: 0, dc: -1 }, 'right': { dr: 0, dc: 1 } };
-        let attempt_direction = null;
-
-        const reached_target = Math.abs(player_center.x - target_center.x) < this.PLAYER_SPEED &&
-            Math.abs(player_center.y - target_center.y) < this.PLAYER_SPEED;
-
-        if (reached_target) {
-            this.player_rect.center = target_center;
-        }
-
-        if (is_aligned && this.player_direction !== this.pending_direction) {
-            attempt_direction = this.pending_direction;
-        } else if (reached_target) {
-            attempt_direction = this.player_direction;
-        }
-
-        if (attempt_direction) {
-            const current_col = Math.round(this.player_rect.x / this.TILE_SIZE);
-            const current_row = Math.round((this.player_rect.y - this.UI_BAR_HEIGHT) / this.TILE_SIZE);
-            const { dr, dc } = dir_map[attempt_direction];
-            const next_tile_key = `${current_row + dr},${current_col + dc}`;
-
-            if (!this.wall_tiles.has(next_tile_key)) {
-                this.player_direction = attempt_direction;
-                this.player_target.x = (current_col + dc) * this.TILE_SIZE;
-                this.player_target.y = ((current_row + dr) * this.TILE_SIZE) + this.UI_BAR_HEIGHT;
-            }
-        }
-
-        // Move rect
-        const dx = this.player_target.center.x - this.player_rect.center.x;
-        const dy = this.player_target.center.y - this.player_rect.center.y;
-
-        if (Math.abs(dx) > 0) this.player_rect.x += Math.sign(dx) * Math.min(Math.abs(dx), this.PLAYER_SPEED);
-        if (Math.abs(dy) > 0) this.player_rect.y += Math.sign(dy) * Math.min(Math.abs(dy), this.PLAYER_SPEED);
-
-        // Tunnel
-        if (this.left_tunnel_rect && this.player_rect.collides(this.left_tunnel_rect)) {
-            this.player_rect.x = this.right_tunnel_rect.x - this.TILE_SIZE;
-            this.player_target = this.player_rect.copy();
-        } else if (this.right_tunnel_rect && this.player_rect.collides(this.right_tunnel_rect)) {
-            this.player_rect.x = this.left_tunnel_rect.x + this.TILE_SIZE;
-            this.player_target = this.player_rect.copy();
-        }
-    }
-
-    checkCollisions() {
-        // Acorns
-        const remaining_acorns = [];
-        for (const acorn of this.acorn_rects) {
-            if (this.player_rect.collides(acorn.rect)) {
-                this.score += (acorn.type === 'O') ? 50 : 10;
-                this.sound.playChomp();
-                if (acorn.type === 'O') {
-                    this.powerup_timer = this.POWERUP_DURATION;
-                    this.squirrels.forEach(s => s.vulnerable = true);
-                }
-            } else {
-                remaining_acorns.push(acorn);
-            }
-        }
-        this.acorn_rects = remaining_acorns;
-
-        if (this.acorn_rects.length === 0) {
-            this.current_level_index++;
-            if (this.current_level_index < this.levels.length) {
-                this.sound.playWin(); // Maybe a shorter level complete sound?
-                // Reset for next level
-                this.setupLevel(); window.game_instance = this;
-                // Need to re-bind wall lines for new level
-                // setupLevel calls generateWallLines so that is covered.
-            } else {
-                this.state = 'won';
-                this.sound.playWin();
-            }
-        }
-
-        // Squirrels
-        for (const squirrel of this.squirrels) {
-            if (this.player_rect.collides(squirrel.rect)) {
-                if (squirrel.vulnerable) {
-                    // Eat Squirrel
-                    this.score += 200;
-                    this.sound.playEatGhost();
-                    squirrel.rect.x = squirrel.start_pos.x;
-                    squirrel.rect.y = squirrel.start_pos.y;
-                    squirrel.target = squirrel.rect.copy();
-                    squirrel.vulnerable = false;
-                } else {
-                    // Player Die
-                    this.lives--;
-                    this.sound.playDie();
-                    if (this.lives > 0) {
-                        this.player_rect.top_left = this.player_start_pos;
-                        this.player_target = this.player_rect.copy();
-                        this.player_direction = 'right';
-                        this.pending_direction = 'right';
-
-                        // Reset squirrels to start positions to prevent spawn-kill
-                        this.squirrels.forEach(s => {
-                            s.rect.x = s.start_pos.x;
-                            s.rect.y = s.start_pos.y;
-                            s.target = s.rect.copy();
-                        });
-                    } else {
-                        this.state = 'game_over';
-                    }
-                }
-            }
-        }
-    }
-
-    resize() {
-        const container = document.getElementById('game-container');
-        if (!container) return;
-
-        const windowWidth = window.innerWidth;
-        const windowHeight = window.innerHeight;
-        const gameWidth = this.SCREEN_WIDTH;
-        const gameHeight = this.SCREEN_HEIGHT;
-        const padding = 20;
-
-        const scaleX = (windowWidth - padding) / gameWidth;
-        const scaleY = (windowHeight - padding) / gameHeight;
-        const scale = Math.min(scaleX, scaleY);
-
-        container.style.transform = `scale(${scale})`;
-        container.style.width = `${gameWidth}px`;
-        container.style.height = `${gameHeight}px`;
-    }
-
-
-    generateWallLines() {
-        this.wall_lines = [];
-        const rows = this.maze_layout.length;
-        const cols = this.maze_layout[0].length;
-        const T = this.TILE_SIZE;
-        const OFFSET_Y = this.UI_BAR_HEIGHT;
-
-        const isWall = (r, c) => {
-            if (r < 0 || r >= rows || c < 0 || c >= cols) return false;
-            const char = this.maze_layout[r][c];
-            return char === 'W' || char === '-';
-        };
-
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                if (!isWall(r, c)) continue;
-
-                const x = c * T;
-                const y = (r * T) + OFFSET_Y;
-
-                // Check neighbors and add lines for exposed edges
-                if (!isWall(r - 1, c)) this.wall_lines.push({ x1: x, y1: y, x2: x + T, y2: y });         // Top
-                if (!isWall(r + 1, c)) this.wall_lines.push({ x1: x, y1: y + T, x2: x + T, y2: y + T }); // Bottom
-                if (!isWall(r, c - 1)) this.wall_lines.push({ x1: x, y1: y, x2: x, y2: y + T });         // Left
-                if (!isWall(r, c + 1)) this.wall_lines.push({ x1: x + T, y1: y, x2: x + T, y2: y + T }); // Right
-            }
-        }
-    }
-
-    draw() {
-        const c = this.ctx;
-
-        // --- Background (Classic Black) ---
-        c.fillStyle = '#000000';
-        c.fillRect(0, 0, this.SCREEN_WIDTH, this.SCREEN_HEIGHT);
-
-        if (this.state === 'loading') {
-            c.fillStyle = '#ffffff'; c.font = '24px "Courier New", monospace';
-            c.textAlign = 'center'; c.fillText('LOADING...', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2);
-            return;
-        }
-        if (this.state === 'error') {
-            c.fillStyle = '#ff0000'; c.font = '24px "Courier New", monospace';
-            c.textAlign = 'center'; c.fillText('ERROR', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2);
-            return;
-        }
         if (this.state === 'start') {
-            if (this.assets.start_screen) {
-                c.drawImage(this.assets.start_screen, 0, 0, this.SCREEN_WIDTH, this.SCREEN_HEIGHT);
+            if (e.key === 'Enter') {
+                this.state = 'playing';
+                if (this.sound.ctx && this.sound.ctx.state === 'suspended') this.sound.ctx.resume();
             }
-            // Blinking Text
-            if (Math.floor(Date.now() / 500) % 2 === 0) {
-                c.font = 'bold 24px "Courier New", monospace';
-                c.fillStyle = '#FFFF00';
-                c.textAlign = 'center';
-                c.fillText('PRESS ENTER', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT - 80);
-            }
-            return;
+        }
+        else if (['won', 'game_over'].includes(this.state)) {
+            // Any key returns to start screen
+            this.state = 'start';
+            this.setupLevel();
         }
 
-        // --- Walls (Classic Blue Outlines) ---
-        c.save();
-        c.strokeStyle = '#2121ff'; // Classic Arcade Blue
-        c.lineWidth = 2; // Thin crisp lines
-        c.shadowBlur = 0; // No glow, keep it crisp
-
-        c.beginPath();
-        for (const line of this.wall_lines) {
-            c.moveTo(line.x1, line.y1);
-            c.lineTo(line.x2, line.y2);
+        // Resume Audio on start
+        if (this.sound.ctx.state === 'suspended') {
+            this.sound.ctx.resume();
         }
-        c.stroke();
-        c.restore();
+        console.log("Game State changed to: playing");
+    }
+}
 
-        // --- Tunnels ---
-        c.fillStyle = '#000000';
-        if (this.left_tunnel_rect) c.fillRect(this.left_tunnel_rect.x, this.left_tunnel_rect.y, this.left_tunnel_rect.width, this.left_tunnel_rect.height);
-        if (this.right_tunnel_rect) c.fillRect(this.right_tunnel_rect.x, this.right_tunnel_rect.y, this.right_tunnel_rect.width, this.right_tunnel_rect.height);
+handleKeyUp(e) {
+    this.keys_pressed[e.key] = false;
+}
 
-        // --- Items (Acorns) ---
-        const acorn_img = this.assets.acorn;
+update() {
+    if (this.state !== 'playing') return;
 
-        for (const acorn of this.acorn_rects) {
-            const cx = acorn.rect.center.x;
-            const cy = acorn.rect.center.y;
+    if (this.powerup_timer > 0) {
+        this.powerup_timer--;
+        if (this.powerup_timer === 0) {
+            this.squirrels.forEach(s => s.vulnerable = false);
+        }
+    }
 
+    this.movePlayer();
+
+    for (const squirrel of this.squirrels) {
+        squirrel.move(
+            this.wall_tiles,
+            this.left_tunnel_rect,
+            this.right_tunnel_rect,
+            this.player_rect,
+            this.player_direction,
+            { rows: this.MAZE_ROWS, cols: this.MAZE_COLS },
+            this.scatter_mode
+        );
+    }
+
+    this.checkCollisions();
+}
+
+isPlayerAligned() {
+    const center = this.player_rect.center;
+    const col_center_x = Math.floor(center.x / this.TILE_SIZE) * this.TILE_SIZE + this.TILE_SIZE / 2;
+    const row_center_y = Math.floor((center.y - this.UI_BAR_HEIGHT) / this.TILE_SIZE) * this.TILE_SIZE + this.TILE_SIZE / 2 + this.UI_BAR_HEIGHT;
+    const tolerance = this.PLAYER_SPEED / 2;
+
+    return Math.abs(center.x - col_center_x) < tolerance && Math.abs(center.y - row_center_y) < tolerance;
+}
+
+movePlayer() {
+    const is_aligned = this.isPlayerAligned();
+    const player_center = this.player_rect.center;
+    const target_center = this.player_target.center;
+    const dir_map = { 'up': { dr: -1, dc: 0 }, 'down': { dr: 1, dc: 0 }, 'left': { dr: 0, dc: -1 }, 'right': { dr: 0, dc: 1 } };
+    let attempt_direction = null;
+
+    const reached_target = Math.abs(player_center.x - target_center.x) < this.PLAYER_SPEED &&
+        Math.abs(player_center.y - target_center.y) < this.PLAYER_SPEED;
+
+    if (reached_target) {
+        this.player_rect.center = target_center;
+    }
+
+    if (is_aligned && this.player_direction !== this.pending_direction) {
+        attempt_direction = this.pending_direction;
+    } else if (reached_target) {
+        attempt_direction = this.player_direction;
+    }
+
+    if (attempt_direction) {
+        const current_col = Math.round(this.player_rect.x / this.TILE_SIZE);
+        const current_row = Math.round((this.player_rect.y - this.UI_BAR_HEIGHT) / this.TILE_SIZE);
+        const { dr, dc } = dir_map[attempt_direction];
+        const next_tile_key = `${current_row + dr},${current_col + dc}`;
+
+        if (!this.wall_tiles.has(next_tile_key)) {
+            this.player_direction = attempt_direction;
+            this.player_target.x = (current_col + dc) * this.TILE_SIZE;
+            this.player_target.y = ((current_row + dr) * this.TILE_SIZE) + this.UI_BAR_HEIGHT;
+        }
+    }
+
+    // Move rect
+    const dx = this.player_target.center.x - this.player_rect.center.x;
+    const dy = this.player_target.center.y - this.player_rect.center.y;
+
+    if (Math.abs(dx) > 0) this.player_rect.x += Math.sign(dx) * Math.min(Math.abs(dx), this.PLAYER_SPEED);
+    if (Math.abs(dy) > 0) this.player_rect.y += Math.sign(dy) * Math.min(Math.abs(dy), this.PLAYER_SPEED);
+
+    // Tunnel
+    if (this.left_tunnel_rect && this.player_rect.collides(this.left_tunnel_rect)) {
+        this.player_rect.x = this.right_tunnel_rect.x - this.TILE_SIZE;
+        this.player_target = this.player_rect.copy();
+    } else if (this.right_tunnel_rect && this.player_rect.collides(this.right_tunnel_rect)) {
+        this.player_rect.x = this.left_tunnel_rect.x + this.TILE_SIZE;
+        this.player_target = this.player_rect.copy();
+    }
+}
+
+checkCollisions() {
+    // Acorns
+    const remaining_acorns = [];
+    for (const acorn of this.acorn_rects) {
+        if (this.player_rect.collides(acorn.rect)) {
+            this.score += (acorn.type === 'O') ? 50 : 10;
+            this.sound.playChomp();
             if (acorn.type === 'O') {
-                // Power Pellet: Larger, blinks
-                const blink = Math.floor(Date.now() / 200) % 2 === 0;
+                this.powerup_timer = this.POWERUP_DURATION;
+                this.squirrels.forEach(s => s.vulnerable = true);
+            }
+        } else {
+            remaining_acorns.push(acorn);
+        }
+    }
+    this.acorn_rects = remaining_acorns;
 
-                if (blink) {
-                    c.save();
-                    c.translate(cx, cy);
-                    c.scale(1.2, 1.2);
-                    if (acorn_img && acorn_img.width > 0) {
-                        c.drawImage(acorn_img, -acorn.rect.width / 2, -acorn.rect.height / 2, acorn.rect.width, acorn.rect.height);
-                    } else {
-                        c.fillStyle = '#ffb8ae';
-                        c.beginPath(); c.arc(0, 0, 8, 0, Math.PI * 2); c.fill();
-                    }
-                    c.restore();
-                }
+    if (this.acorn_rects.length === 0) {
+        this.current_level_index++;
+        if (this.current_level_index < this.levels.length) {
+            this.sound.playWin(); // Maybe a shorter level complete sound?
+            // Reset for next level
+            this.setupLevel(); window.game_instance = this;
+            // Need to re-bind wall lines for new level
+            // setupLevel calls generateWallLines so that is covered.
+        } else {
+            this.state = 'won';
+            this.sound.playWin();
+            if (this.highScores.isHighScore(this.score)) {
+                this.showNameInput();
+            }
+        }
+    }
 
+    // Squirrels
+    for (const squirrel of this.squirrels) {
+        if (this.player_rect.collides(squirrel.rect)) {
+            if (squirrel.vulnerable) {
+                // Eat Squirrel
+                this.score += 200;
+                this.sound.playEatGhost();
+                squirrel.rect.x = squirrel.start_pos.x;
+                squirrel.rect.y = squirrel.start_pos.y;
+                squirrel.target = squirrel.rect.copy();
+                squirrel.vulnerable = false;
             } else {
-                // Normal Acorn
+                // Player Die
+                this.lives--;
+                this.sound.playDie();
+                if (this.lives > 0) {
+                    this.player_rect.top_left = this.player_start_pos;
+                    this.player_target = this.player_rect.copy();
+                    this.player_direction = 'right';
+                    this.pending_direction = 'right';
+
+                    // Reset squirrels to start positions to prevent spawn-kill
+                    this.squirrels.forEach(s => {
+                        s.rect.x = s.start_pos.x;
+                        s.rect.y = s.start_pos.y;
+                        s.target = s.rect.copy();
+                    });
+                } else {
+                    this.state = 'game_over';
+
+                    if (this.highScores.isHighScore(this.score)) {
+                        this.showNameInput();
+                    }
+                }
+            }
+        }
+    }
+
+    showNameInput() {
+        const overlay = document.getElementById('name-input-overlay');
+        const input = document.getElementById('player-name');
+        const submit = document.getElementById('submit-score');
+
+        if (overlay) {
+            overlay.style.display = 'flex';
+            input.value = '';
+            input.focus();
+
+            const submitHandler = async () => {
+                const name = input.value || 'AAA';
+                await this.highScores.submitScore(name, this.score);
+                overlay.style.display = 'none';
+                // Remove listener to prevent multiple submissions if restarted
+                submit.onclick = null;
+            };
+
+            submit.onclick = submitHandler;
+
+            // Allow Enter key to submit
+            input.onkeydown = (e) => {
+                if (e.key === 'Enter') submitHandler();
+            };
+        }
+    }
+}
+
+resize() {
+    const container = document.getElementById('game-container');
+    if (!container) return;
+
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+    const gameWidth = this.SCREEN_WIDTH;
+    const gameHeight = this.SCREEN_HEIGHT;
+    const padding = 20;
+
+    const scaleX = (windowWidth - padding) / gameWidth;
+    const scaleY = (windowHeight - padding) / gameHeight;
+    const scale = Math.min(scaleX, scaleY);
+
+    container.style.transform = `scale(${scale})`;
+    container.style.width = `${gameWidth}px`;
+    container.style.height = `${gameHeight}px`;
+}
+
+
+generateWallLines() {
+    this.wall_lines = [];
+    const rows = this.maze_layout.length;
+    const cols = this.maze_layout[0].length;
+    const T = this.TILE_SIZE;
+    const OFFSET_Y = this.UI_BAR_HEIGHT;
+
+    const isWall = (r, c) => {
+        if (r < 0 || r >= rows || c < 0 || c >= cols) return false;
+        const char = this.maze_layout[r][c];
+        return char === 'W' || char === '-';
+    };
+
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            if (!isWall(r, c)) continue;
+
+            const x = c * T;
+            const y = (r * T) + OFFSET_Y;
+
+            // Check neighbors and add lines for exposed edges
+            if (!isWall(r - 1, c)) this.wall_lines.push({ x1: x, y1: y, x2: x + T, y2: y });         // Top
+            if (!isWall(r + 1, c)) this.wall_lines.push({ x1: x, y1: y + T, x2: x + T, y2: y + T }); // Bottom
+            if (!isWall(r, c - 1)) this.wall_lines.push({ x1: x, y1: y, x2: x, y2: y + T });         // Left
+            if (!isWall(r, c + 1)) this.wall_lines.push({ x1: x + T, y1: y, x2: x + T, y2: y + T }); // Right
+        }
+    }
+}
+
+draw() {
+    const c = this.ctx;
+
+    // --- Background (Classic Black) ---
+    c.fillStyle = '#000000';
+    c.fillRect(0, 0, this.SCREEN_WIDTH, this.SCREEN_HEIGHT);
+
+    if (this.state === 'loading') {
+        c.fillStyle = '#ffffff'; c.font = '24px "Courier New", monospace';
+        c.textAlign = 'center'; c.fillText('LOADING...', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2);
+        return;
+    }
+    if (this.state === 'error') {
+        c.fillStyle = '#ff0000'; c.font = '24px "Courier New", monospace';
+        c.textAlign = 'center'; c.fillText('ERROR', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2);
+        return;
+    }
+    if (this.state === 'start') {
+        if (this.assets.start_screen) {
+            c.drawImage(this.assets.start_screen, 0, 0, this.SCREEN_WIDTH, this.SCREEN_HEIGHT);
+        } else {
+            c.fillStyle = '#000000';
+            c.fillRect(0, 0, this.SCREEN_WIDTH, this.SCREEN_HEIGHT);
+        }
+
+        // Blinking Text
+        if (Math.floor(Date.now() / 500) % 2 === 0) {
+            c.font = 'bold 24px "Courier New", monospace';
+            c.fillStyle = '#FFFF00';
+            c.textAlign = 'center';
+            c.fillText('PRESS ENTER', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2 + 50);
+        }
+
+        // High Scores
+        c.fillStyle = '#FFFFFF';
+        c.font = 'bold 20px "Courier New", monospace';
+        c.textAlign = 'center';
+        c.fillText('TOP SCORES', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2 + 120);
+
+        const scores = this.highScores.getScores();
+        scores.slice(0, 5).forEach((s, i) => {
+            const text = s.name ? `${i + 1}. ${s.name} - ${s.score}` : `${i + 1}. ${s}`;
+            c.fillText(text, this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2 + 150 + (i * 25));
+        });
+
+        return;
+    }
+
+    // --- Walls (Classic Blue Outlines) ---
+    c.save();
+    c.strokeStyle = '#2121ff'; // Classic Arcade Blue
+    c.lineWidth = 2; // Thin crisp lines
+    c.shadowBlur = 0; // No glow, keep it crisp
+
+    c.beginPath();
+    for (const line of this.wall_lines) {
+        c.moveTo(line.x1, line.y1);
+        c.lineTo(line.x2, line.y2);
+    }
+    c.stroke();
+    c.restore();
+
+    // --- Tunnels ---
+    c.fillStyle = '#000000';
+    if (this.left_tunnel_rect) c.fillRect(this.left_tunnel_rect.x, this.left_tunnel_rect.y, this.left_tunnel_rect.width, this.left_tunnel_rect.height);
+    if (this.right_tunnel_rect) c.fillRect(this.right_tunnel_rect.x, this.right_tunnel_rect.y, this.right_tunnel_rect.width, this.right_tunnel_rect.height);
+
+    // --- Items (Acorns) ---
+    const acorn_img = this.assets.acorn;
+
+    for (const acorn of this.acorn_rects) {
+        const cx = acorn.rect.center.x;
+        const cy = acorn.rect.center.y;
+
+        if (acorn.type === 'O') {
+            // Power Pellet: Larger, blinks
+            const blink = Math.floor(Date.now() / 200) % 2 === 0;
+
+            if (blink) {
                 c.save();
                 c.translate(cx, cy);
-
+                c.scale(1.2, 1.2);
                 if (acorn_img && acorn_img.width > 0) {
                     c.drawImage(acorn_img, -acorn.rect.width / 2, -acorn.rect.height / 2, acorn.rect.width, acorn.rect.height);
                 } else {
-                    c.fillStyle = '#ffb8ae'; // Salmon
-                    c.beginPath(); c.fillRect(-2, -2, 4, 4); // Square dot
+                    c.fillStyle = '#ffb8ae';
+                    c.beginPath(); c.arc(0, 0, 8, 0, Math.PI * 2); c.fill();
                 }
                 c.restore();
             }
-        }
 
-        // --- Player ---
-        if (this.player_rect) {
+        } else {
+            // Normal Acorn
             c.save();
-            const cx = this.player_rect.center.x;
-            const cy = this.player_rect.center.y;
             c.translate(cx, cy);
 
-            let rotation = 0;
-            let flipX = false;
-            if (this.player_direction === 'up') rotation = -90;
-            if (this.player_direction === 'down') rotation = 90;
-            if (this.player_direction === 'left') flipX = true;
-
-            const sprite = this.player_images[this.player_direction];
-
-            if (sprite) {
-                c.drawImage(sprite, -this.TILE_SIZE / 1.4, -this.TILE_SIZE / 1.4, this.TILE_SIZE * 1.4, this.TILE_SIZE * 1.4);
-            } else if (this.assets.player_orig) {
-                if (flipX) c.scale(-1, 1);
-                c.rotate(rotation * Math.PI / 180);
-                c.drawImage(this.assets.player_orig, -this.TILE_SIZE / 1.4, -this.TILE_SIZE / 1.4, this.TILE_SIZE * 1.4, this.TILE_SIZE * 1.4);
+            if (acorn_img && acorn_img.width > 0) {
+                c.drawImage(acorn_img, -acorn.rect.width / 2, -acorn.rect.height / 2, acorn.rect.width, acorn.rect.height);
             } else {
-                c.fillStyle = '#FFFF00';
-                c.beginPath(); c.arc(0, 0, this.TILE_SIZE / 2 - 2, 0, Math.PI * 2); c.fill();
+                c.fillStyle = '#ffb8ae'; // Salmon
+                c.beginPath(); c.fillRect(-2, -2, 4, 4); // Square dot
             }
             c.restore();
         }
+    }
 
-        // --- Squirrels ---
-        this.squirrels.forEach(s => s.draw(c, this.assets));
+    // --- Player ---
+    if (this.player_rect) {
+        c.save();
+        const cx = this.player_rect.center.x;
+        const cy = this.player_rect.center.y;
+        c.translate(cx, cy);
 
-        // --- UI Bar ---
-        c.fillStyle = '#000000';
-        c.fillRect(0, 0, this.SCREEN_WIDTH, this.UI_BAR_HEIGHT);
+        let rotation = 0;
+        let flipX = false;
+        if (this.player_direction === 'up') rotation = -90;
+        if (this.player_direction === 'down') rotation = 90;
+        if (this.player_direction === 'left') flipX = true;
 
-        c.fillStyle = '#FFFFFF';
-        c.font = 'bold 20px "Courier New", monospace';
-        c.textAlign = 'left';
+        const sprite = this.player_images[this.player_direction];
 
-        c.fillText(`SCORE`, 20, 25);
-        c.textAlign = 'right';
-        c.fillText(`LIVES`, this.SCREEN_WIDTH - 20, 25);
-
-        c.fillStyle = '#FFFF00';
-        c.textAlign = 'left';
-        c.fillText(`${this.score}`, 20, 45);
-
-        c.textAlign = 'right';
-        if (this.assets.life_icon) {
-            for (let i = 0; i < this.lives; i++) {
-                c.drawImage(this.assets.life_icon, this.SCREEN_WIDTH - 20 - ((i + 1) * 30), 28, 24, 24);
-            }
+        if (sprite) {
+            c.drawImage(sprite, -this.TILE_SIZE / 1.4, -this.TILE_SIZE / 1.4, this.TILE_SIZE * 1.4, this.TILE_SIZE * 1.4);
+        } else if (this.assets.player_orig) {
+            if (flipX) c.scale(-1, 1);
+            c.rotate(rotation * Math.PI / 180);
+            c.drawImage(this.assets.player_orig, -this.TILE_SIZE / 1.4, -this.TILE_SIZE / 1.4, this.TILE_SIZE * 1.4, this.TILE_SIZE * 1.4);
         } else {
-            c.fillText(`${this.lives}`, this.SCREEN_WIDTH - 20, 45);
+            c.fillStyle = '#FFFF00';
+            c.beginPath(); c.arc(0, 0, this.TILE_SIZE / 2 - 2, 0, Math.PI * 2); c.fill();
         }
-
-        if (this.powerup_timer > 0) {
-            const time_left = Math.ceil(this.powerup_timer / 30);
-            c.fillStyle = '#2121ff'; c.textAlign = 'center';
-            c.fillText(`POWER: ${time_left}`, this.SCREEN_WIDTH / 2, 38);
-        }
-
-        // --- Overlays ---
-        if (this.state === 'game_over') {
-            c.save();
-            c.fillStyle = 'rgba(0,0,0,0.8)';
-            c.fillRect(0, 0, this.SCREEN_WIDTH, this.SCREEN_HEIGHT);
-
-            c.fillStyle = '#FF0000';
-            c.font = 'bold 40px "Courier New", monospace';
-            c.textAlign = 'center';
-            c.fillText('GAME  OVER', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2);
-            c.restore();
-
-            c.fillStyle = '#ffffff';
-            c.font = '20px "Courier New", monospace';
-            c.textAlign = 'center';
-            c.fillText('PRESS ENTER', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2 + 60);
-        }
-        else if (this.state === 'won') {
-            c.fillStyle = 'rgba(0,0,0,0.8)';
-            c.fillRect(0, 0, this.SCREEN_WIDTH, this.SCREEN_HEIGHT);
-
-            c.fillStyle = '#00FF00';
-            c.font = 'bold 40px "Courier New", monospace';
-            c.textAlign = 'center';
-            c.fillText('YOU WIN!', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2);
-
-            c.fillStyle = '#ffffff';
-            c.font = '20px "Courier New", monospace';
-            c.fillText('SCORE: ' + this.score, this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2 + 50);
-            c.fillText('PRESS ENTER', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2 + 90);
-        }
+        c.restore();
     }
 
+    // --- Squirrels ---
+    this.squirrels.forEach(s => s.draw(c, this.assets));
 
-    gameLoop(timestamp) {
-        if (this.state === 'loading' || this.state === 'error') {
-            this.draw();
-            requestAnimationFrame(this.gameLoop);
-            return;
-        }
+    // --- UI Bar ---
+    c.fillStyle = '#000000';
+    c.fillRect(0, 0, this.SCREEN_WIDTH, this.UI_BAR_HEIGHT);
 
-        const elapsed = timestamp - this.last_frame_time;
-        if (elapsed > this.FRAME_DURATION) {
-            this.last_frame_time = timestamp - (elapsed % this.FRAME_DURATION);
-            this.update();
-            this.draw();
+    c.fillStyle = '#FFFFFF';
+    c.font = 'bold 20px "Courier New", monospace';
+    c.textAlign = 'left';
+
+    c.fillText(`SCORE`, 20, 25);
+    c.textAlign = 'right';
+    c.fillText(`LIVES`, this.SCREEN_WIDTH - 20, 25);
+
+    c.fillStyle = '#FFFF00';
+    c.textAlign = 'left';
+    c.fillText(`${this.score}`, 20, 45);
+
+    c.textAlign = 'right';
+    if (this.assets.life_icon) {
+        for (let i = 0; i < this.lives; i++) {
+            c.drawImage(this.assets.life_icon, this.SCREEN_WIDTH - 20 - ((i + 1) * 30), 28, 24, 24);
         }
+    } else {
+        c.fillText(`${this.lives}`, this.SCREEN_WIDTH - 20, 45);
+    }
+
+    if (this.powerup_timer > 0) {
+        const time_left = Math.ceil(this.powerup_timer / 30);
+        c.fillStyle = '#2121ff'; c.textAlign = 'center';
+        c.fillText(`POWER: ${time_left}`, this.SCREEN_WIDTH / 2, 38);
+    }
+
+    // --- Overlays ---
+    if (this.state === 'game_over') {
+        c.save();
+        c.fillStyle = 'rgba(0,0,0,0.8)';
+        c.fillRect(0, 0, this.SCREEN_WIDTH, this.SCREEN_HEIGHT);
+
+        c.fillStyle = '#FF0000';
+        c.font = 'bold 40px "Courier New", monospace';
+        c.textAlign = 'center';
+        c.fillText('GAME  OVER', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2);
+        c.restore();
+
+        c.fillStyle = '#ffffff';
+        c.font = '20px "Courier New", monospace';
+        c.textAlign = 'center';
+        c.fillText('PRESS ENTER', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2 + 60);
+    }
+    else if (this.state === 'won') {
+        c.fillStyle = 'rgba(0,0,0,0.8)';
+        c.fillRect(0, 0, this.SCREEN_WIDTH, this.SCREEN_HEIGHT);
+
+        c.fillStyle = '#00FF00';
+        c.font = 'bold 40px "Courier New", monospace';
+        c.textAlign = 'center';
+        c.fillText('YOU WIN!', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2);
+
+        c.fillStyle = '#ffffff';
+        c.font = '20px "Courier New", monospace';
+        c.fillText('SCORE: ' + this.score, this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2 + 50);
+        c.fillText('PRESS ENTER', this.SCREEN_WIDTH / 2, this.SCREEN_HEIGHT / 2 + 90);
+    }
+}
+
+
+gameLoop(timestamp) {
+    if (this.state === 'loading' || this.state === 'error') {
+        this.draw();
         requestAnimationFrame(this.gameLoop);
+        return;
     }
+
+    const elapsed = timestamp - this.last_frame_time;
+    if (elapsed > this.FRAME_DURATION) {
+        this.last_frame_time = timestamp - (elapsed % this.FRAME_DURATION);
+        this.update();
+        this.draw();
+    }
+    requestAnimationFrame(this.gameLoop);
+}
 }
 
 // Start Game
