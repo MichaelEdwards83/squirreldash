@@ -49,46 +49,55 @@ class Squirrel {
     }
 
     // Determine the target coordinate based on personality and game state
-    getLogicTarget(player_rect, player_direction, maze_cols, maze_rows) {
+    getLogicTarget(player_rect, player_direction, scatter_mode) {
         const p_col = Math.round(player_rect.x / this.tileSize);
         const p_row = Math.round((player_rect.y - this.uiBarHeight) / this.tileSize);
 
-        // If vulnerable, run away! (Target opposite of player)
+        // Scatter Logic
+        if (scatter_mode && !this.vulnerable) {
+            // Target specific corners
+            if (this.personality === 0) return { col: 25, row: 0 }; // Top Right
+            if (this.personality === 1) return { col: 0, row: 0 };  // Top Left
+            if (this.personality === 2) return { col: 25, row: 29 }; // Bottom Right
+            return { col: 0, row: 29 }; // Bottom Left (for Random/Other)
+        }
+
         if (this.vulnerable) {
-            // Simple approach: invert player position relative to center map? 
-            // Better: random valid moves favoring distance. 
-            // For simplicity, just behave randomly when vulnerable, it's chaotic enough.
-            return null;
+            return null; // Random panic
         }
 
         if (this.personality === 0) {
-            // CHASER: Direct targeting
+            // CHASER: Direct targeting but with mistakes
+            // 20% chance to be confused (return null -> random move)
+            if (Math.random() < 0.2) return null;
             return { col: p_col, row: p_row };
         }
         else if (this.personality === 1) {
-            // AMBUSHER: Target 4 tiles ahead of player
+            // AMBUSHER: Target 4 tiles ahead
             const { dr, dc } = this.direction_map[player_direction] || { dr: 0, dc: 0 };
             return { col: p_col + (dc * 4), row: p_row + (dr * 4) };
         }
         else if (this.personality === 2) {
-            // SENTINEL: Patrol top-left, but chase if player is close (within 8 tiles)
+            // SENTINEL: Reduced radius (8 -> 5)
             const s_col = Math.round(this.rect.x / this.tileSize);
             const s_row = Math.round((this.rect.y - this.uiBarHeight) / this.tileSize);
             const dist = Math.sqrt(Math.pow(s_col - p_col, 2) + Math.pow(s_row - p_row, 2));
 
-            if (dist < 8) {
+            if (dist < 5) { // NERFED from 8
                 return { col: p_col, row: p_row };
             } else {
                 return { col: 1, row: 1 }; // Patrol Top-Left corner
             }
         }
         else {
-            // RANDOM
-            return null;
+            return null; // RANDOM
         }
     }
+    
 
-    move(wall_tiles, left_tunnel, right_tunnel, player_rect, player_direction, maze_dims) {
+    
+
+    move(wall_tiles, left_tunnel, right_tunnel, player_rect, player_direction, maze_dims, scatter_mode = false) {
         const current_speed = this.vulnerable ? this.vulnerable_speed : this.normal_speed;
         const target_center = this.target.center;
         const rect_center = this.rect.center;
@@ -116,7 +125,7 @@ class Squirrel {
             }
 
             // AI Decision Making
-            const logicTarget = this.getLogicTarget(player_rect, player_direction);
+            const logicTarget = this.getLogicTarget(player_rect, player_direction, scatter_mode);
 
             if (logicTarget && valid_directions.length > 1) {
                 // Choose direction that minimizes distance to logicTarget
@@ -162,6 +171,11 @@ class Squirrel {
             this.rect.x = left_tunnel.x + this.tileSize;
             this.target = this.rect.copy();
         }
+    }
+
+
+    reverseDirection() {
+        this.direction = this.opposites[this.direction];
     }
 
     draw(ctx, assets) {
@@ -370,6 +384,11 @@ class Game {
         this.score = 0;
         this.lives = 3;
         this.powerup_timer = 0;
+        this.scatter_mode = false;
+        this.mode_timer = 0;
+        this.SCATTER_DURATION = 200; // ~7 seconds
+        this.CHASE_DURATION = 600; // ~20 seconds
+    
         this.generateWallLines();
         this.last_frame_time = performance.now();
         this.assets = {};
@@ -540,6 +559,11 @@ class Game {
             this.lives = 3;
         }
         this.powerup_timer = 0;
+        this.scatter_mode = false;
+        this.mode_timer = 0;
+        this.SCATTER_DURATION = 200; // ~7 seconds
+        this.CHASE_DURATION = 600; // ~20 seconds
+    
         this.generateWallLines();
     }
 
@@ -606,7 +630,8 @@ class Game {
                 this.right_tunnel_rect,
                 this.player_rect,
                 this.player_direction,
-                { rows: this.MAZE_ROWS, cols: this.MAZE_COLS }
+                { rows: this.MAZE_ROWS, cols: this.MAZE_COLS },
+                this.scatter_mode
             );
         }
 
